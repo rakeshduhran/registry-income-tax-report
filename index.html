@@ -1,0 +1,865 @@
+<!DOCTYPE html>
+<html lang="hi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PDF Reader</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;background:#f3f6f4;color:#202124;font-family:Arial,sans-serif}
+header{background:#087c3e;color:#fff;text-align:center;padding:15px;font-size:23px;font-weight:700}
+.version{font-size:12px;font-weight:400;opacity:.9}
+.container{width:96%;max-width:1280px;margin:16px auto 40px}
+.upload-card,.file-list,.progress-card,.table-card{background:#fff;border-radius:12px;margin-top:12px}
+.upload-card{padding:22px 14px;text-align:center;border:2px dashed #087c3e}
+.upload-card h1{margin:0 0 8px;font-size:22px}
+.upload-card p{margin:0;color:#666;font-size:13px}
+.buttons{display:flex;justify-content:center;gap:9px;flex-wrap:wrap;margin-top:15px}
+.button{border:0;border-radius:8px;padding:12px 17px;font-weight:700;font-size:14px;cursor:pointer}
+.primary{background:#087c3e;color:#fff}
+.secondary{background:#e7eee9;color:#17633a}
+.danger{background:#fbe8e8;color:#a21c1c}
+button:disabled{opacity:.42;cursor:not-allowed}
+.native-picker{position:relative;overflow:hidden;display:inline-flex;align-items:center;justify-content:center}
+.native-picker input[type=file]{position:absolute;inset:0;width:100%;height:100%;opacity:0;cursor:pointer}
+.summary{display:grid;grid-template-columns:repeat(3,1fr);gap:9px;margin-top:12px}
+.summary div{background:#fff;border-radius:10px;text-align:center;padding:10px}
+.summary strong{display:block;color:#087c3e;font-size:23px}
+.file-list{padding:10px;max-height:170px;overflow:auto}
+.file-item{padding:7px;border-bottom:1px solid #eee;font-size:13px;overflow-wrap:anywhere}
+.progress-card{padding:12px}
+.progress-track{height:14px;border-radius:20px;background:#e4e9e6;overflow:hidden}
+#progressBar{height:100%;width:0;background:#087c3e;transition:width .2s}
+#statusText{text-align:center;margin-top:8px;font-size:13px}
+.table-card{overflow-x:auto}
+table{width:100%;min-width:1050px;border-collapse:collapse}
+th{position:sticky;top:0;background:#087c3e;color:#fff;padding:9px 6px;font-size:12px;white-space:nowrap}
+td{border:1px solid #ddd;padding:8px 6px;text-align:center;font-size:12px}
+.success{color:#087c3e;font-weight:700}
+.warning{color:#b26a00;font-weight:700}
+.hidden{display:none}
+@media(max-width:650px){
+header{font-size:20px}
+.button{width:100%}
+.upload-card h1{font-size:20px}
+}
+</style>
+</head>
+<body>
+<header>PDF Reader <span class="version">v10.0 Income Tax Report</span></header>
+<main class="container">
+<section class="upload-card">
+<h1>Registry PDF Upload</h1>
+<p>एक साथ अधिकतम 500 PDF — Deed और First/Second Party details पढ़ी जाएँगी</p>
+<div class="buttons">
+<div class="button primary native-picker">📁 Select PDFs
+<input id="fileInput" type="file" accept="application/pdf,.pdf" multiple>
+</div>
+<button id="readButton" class="button primary" disabled>▶ Read Data</button>
+<button id="csvButton" class="button secondary" disabled>⬇ Download Excel</button>
+<button id="clearButton" class="button danger" disabled>🗑 Clear</button>
+</div>
+</section>
+<section class="summary">
+<div>Selected<strong id="selectedCount">0</strong></div>
+<div>Completed<strong id="completedCount">0</strong></div>
+<div>Check<strong id="checkCount">0</strong></div>
+</section>
+<section id="fileList" class="file-list hidden"></section>
+<section id="progressArea" class="progress-card hidden">
+<div class="progress-track"><div id="progressBar"></div></div>
+<div id="statusText">Ready</div>
+</section>
+<section class="table-card">
+<table>
+<thead><tr>
+<th>Sr.</th><th>Deed Type</th><th>Deed Name</th><th>Registry No.</th><th>Registration Date</th>
+<th>Token No.</th><th>Deed Amount</th><th>Land Value</th><th>Stamp Duty</th>
+<th>Registration Fee</th>
+<th>First Party Name</th><th>First Party Relation</th><th>First Party Father/Relative</th><th>First Party Grandfather</th><th>First Party PAN</th><th>First Party Address</th>
+<th>Second Party Name</th><th>Second Party Relation</th><th>Second Party Father/Relative</th><th>Second Party Grandfather</th><th>Second Party PAN</th><th>Second Party Address</th><th>Status</th>
+</tr></thead>
+<tbody id="resultBody"><tr><td colspan="23">पहले PDF चुनें</td></tr></tbody>
+</table>
+</section>
+</main>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<script>
+
+"use strict";
+
+pdfjsLib.GlobalWorkerOptions.workerSrc =
+"https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+
+const $ = id => document.getElementById(id);
+
+const fileInput=$("fileInput"), readButton=$("readButton"), csvButton=$("csvButton"),
+clearButton=$("clearButton"), fileList=$("fileList"), progressArea=$("progressArea"),
+progressBar=$("progressBar"), statusText=$("statusText"), resultBody=$("resultBody"),
+selectedCount=$("selectedCount"), completedCount=$("completedCount"), checkCount=$("checkCount");
+
+let selectedFiles=[], results=[];
+
+fileInput.addEventListener("change",()=>{
+  const chosen=Array.from(fileInput.files||[]);
+  if(chosen.length>500){
+    alert("एक बार में अधिकतम 500 PDF चुनें।");
+    fileInput.value="";
+    return;
+  }
+  selectedFiles=chosen.filter(f=>f.type==="application/pdf"||f.name.toLowerCase().endsWith(".pdf"));
+  results=[];
+  selectedCount.textContent=selectedFiles.length;
+  completedCount.textContent="0";
+  checkCount.textContent="0";
+  readButton.disabled=!selectedFiles.length;
+  csvButton.disabled=true;
+  clearButton.disabled=!selectedFiles.length;
+  fileList.classList.toggle("hidden",!selectedFiles.length);
+  fileList.innerHTML=selectedFiles.map((f,i)=>`<div class="file-item">${i+1}. ${escapeHtml(f.name)}</div>`).join("");
+  resultBody.innerHTML=selectedFiles.length
+    ? `<tr><td colspan="23">${selectedFiles.length} PDF चुनी गई हैं। अब Read Data दबाएँ।</td></tr>`
+    : `<tr><td colspan="23">पहले PDF चुनें</td></tr>`;
+});
+
+clearButton.addEventListener("click",()=>{
+  selectedFiles=[];results=[];fileInput.value="";
+  selectedCount.textContent="0";completedCount.textContent="0";checkCount.textContent="0";
+  readButton.disabled=true;csvButton.disabled=true;clearButton.disabled=true;
+  fileList.innerHTML="";fileList.classList.add("hidden");progressArea.classList.add("hidden");
+  progressBar.style.width="0%";
+  resultBody.innerHTML='<tr><td colspan="23">पहले PDF चुनें</td></tr>';
+});
+
+readButton.addEventListener("click",async()=>{
+  if(!selectedFiles.length)return;
+  results=[];
+  resultBody.innerHTML="";
+  progressArea.classList.remove("hidden");
+  readButton.disabled=true;
+  csvButton.disabled=true;
+
+  let completed=0, checks=0;
+
+  for(let i=0;i<selectedFiles.length;i++){
+    const file=selectedFiles[i];
+    setProgress(i,selectedFiles.length,`Reading ${i+1}/${selectedFiles.length}: ${file.name}`);
+
+    try{
+      const pages=await readFirstTwoPages(file);
+      const record=parseRegistryPages(pages);
+      record.fileName=file.name;
+
+      record.status=(
+        record.deedType &&
+        record.deedName &&
+        record.registryNumber &&
+        record.registrationDate &&
+        record.tokenNumber &&
+        record.partyDataComplete
+      ) ? "Completed" : "Check";
+
+      if(record.status==="Completed"){
+        completed++;
+      }else{
+        checks++;
+      }
+
+      results.push(record);
+      appendRow(record,i+1);
+    }catch(err){
+      console.error(file.name,err);
+      const record=emptyRecord();
+      record.fileName=file.name;
+      record.status="Check";
+      results.push(record);
+      checks++;
+      appendRow(record,i+1);
+    }
+
+    completedCount.textContent=completed;
+    checkCount.textContent=checks;
+  }
+
+  setProgress(selectedFiles.length,selectedFiles.length,`Completed: ${completed} | Check: ${checks}`);
+  readButton.disabled=false;
+  csvButton.disabled=!results.length;
+});
+
+async function readFirstTwoPages(file){
+  const buffer=await file.arrayBuffer();
+  const pdf=await pdfjsLib.getDocument({data:buffer}).promise;
+  const count=Math.min(6,pdf.numPages);
+  const pages=[];
+
+  for(let n=1;n<=count;n++){
+    statusText.textContent=`PDF Page ${n}/${count} पढ़ रहा है...`;
+    const page=await pdf.getPage(n);
+    const content=await page.getTextContent();
+
+    const items=content.items
+      .filter(item=>String(item.str||"").trim())
+      .map(item=>({
+        text:String(item.str||"").trim(),
+        x:Number(item.transform?.[4]||0),
+        y:Number(item.transform?.[5]||0),
+        width:Number(item.width||0),
+        height:Number(item.height||0)
+      }));
+
+    pages.push({
+      pageNumber:n,
+      width:Number(page.view?.[2]-page.view?.[0])||595,
+      items,
+      rows:groupRows(content.items)
+    });
+    if(n>=2 && pages[n-1].rows.some(row=>/Witness\s+Details/i.test(row)))break;
+  }
+  await pdf.destroy();
+  return pages;
+}
+
+function groupRows(items){
+  const usable=items
+    .filter(item=>String(item.str||"").trim())
+    .map(item=>({
+      text:String(item.str||"").trim(),
+      x:Number(item.transform?.[4]||0),
+      y:Number(item.transform?.[5]||0)
+    }))
+    .sort((a,b)=>(b.y-a.y)||(a.x-b.x));
+
+  const rows=[];
+  const tolerance=4;
+
+  for(const item of usable){
+    let row=rows.find(candidate=>Math.abs(candidate.y-item.y)<=tolerance);
+    if(!row){
+      row={y:item.y,items:[]};
+      rows.push(row);
+    }
+    row.items.push(item);
+  }
+
+  return rows
+    .sort((a,b)=>b.y-a.y)
+    .map(row=>row.items
+      .sort((a,b)=>a.x-b.x)
+      .map(item=>item.text)
+      .join(" ")
+      .replace(/\s+/g," ")
+      .trim()
+    )
+    .filter(Boolean);
+}
+
+function parseRegistryPages(pages){
+  const page1=pages[0]?.rows||[];
+  const page2=pages[1]?.rows||[];
+  const allRows=[...page1,...page2];
+  const fullText=normalizeText(allRows.join("\n"));
+  const compact=compactText(fullText);
+  const record=emptyRecord();
+
+  record.deedType=extractDeedType(allRows);
+  record.deedName=extractDeedName(allRows,fullText)||record.deedType;
+
+  record.registryNumber=
+    extractAfterCompact(compact,["प्रलेखक्र","प्रलेखक्रमांक"],"integer") ||
+    firstMatch(fullText,[
+      /Registration\s*No\.?\s*[:\-]?\s*(\d+)/i,
+      /Registration\s*Number\s*[:\-]?\s*(\d+)/i
+    ]);
+
+  record.registrationDate=normalizeDate(
+    extractAfterCompact(compact,["पंजीकरणदिनांक"],"date") ||
+    firstMatch(fullText,[
+      /Registration\s*No\.?\s*[:\-]?\s*\d+[\s\S]{0,60}?Date\s*[:\-]?\s*(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{4})/i,
+      /\bDate\s*[:\-]?\s*(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{4})/i
+    ])
+  );
+
+  record.tokenNumber=firstMatch(fullText,[/\b(PAN_[A-Z0-9_]+)\b/i]);
+
+  record.stampDuty=extractMoneyByCoordinates(pages[0],/Stamp\s*Duty\s*Paid/i);
+  record.registrationFees=extractMoneyByCoordinates(pages[0],/Registration\s*Fees?/i);
+
+  record.deedAmount=extractMoneyFromHindiRows(allRows,"deal");
+  record.landValue=extractMoneyFromHindiRows(allRows,"collector");
+
+  if(record.stampDuty==="0.00"){
+    record.stampDuty=extractMoneyFromHindiRows(allRows,"stamp");
+  }
+  if(record.registrationFees==="0.00"){
+    record.registrationFees=extractMoneyFromHindiRows(allRows,"regfee");
+  }
+
+  const parties=extractAllParties(pages);
+  record.firstParties=parties.first;
+  record.secondParties=parties.second;
+  record.firstPartyName=joinPartyField(parties.first,"name");
+  record.firstPartyRelation=joinPartyField(parties.first,"relation");
+  record.firstPartyRelative=joinPartyField(parties.first,"relative");
+  record.firstPartyGrandfather=joinPartyField(parties.first,"grandfather");
+  record.firstPartyPan=joinPartyField(parties.first,"pan");
+  record.firstPartyAddress=joinPartyField(parties.first,"address");
+  record.secondPartyName=joinPartyField(parties.second,"name");
+  record.secondPartyRelation=joinPartyField(parties.second,"relation");
+  record.secondPartyRelative=joinPartyField(parties.second,"relative");
+  record.secondPartyGrandfather=joinPartyField(parties.second,"grandfather");
+  record.secondPartyPan=joinPartyField(parties.second,"pan");
+  record.secondPartyAddress=joinPartyField(parties.second,"address");
+  record.partyDataComplete=parties.first.length>0 &&
+    parties.first.every(p=>isValidPan(p.pan)) &&
+    (isWillRecord(record) || (parties.second.length>0 && parties.second.every(p=>isValidPan(p.pan))));
+
+  return record;
+}
+
+function extractDeedName(rows,text){
+  for(let i=0;i<rows.length;i++){
+    const row=normalizeText(rows[i]);
+    if(!/वसीका/.test(row)||!/नाम/.test(row))continue;
+    const english=row.match(/([A-Z][A-Z0-9 /&(),.'-]{2,})\s*$/);
+    if(english){
+      let value=english[1].trim();
+      const next=normalizeText(rows[i+1]||"");
+      if(next&&/^[A-Z][A-Z0-9 /&(),.'-]+$/.test(next)&&!/^(?:Token|Registration|Page)\b/i.test(next))value+=` ${next}`;
+      return value.replace(/\s+/g," ").trim();
+    }
+  }
+  const match=String(text||"").match(/वसीका\s*का\s*नाम\s+([\s\S]{1,220}?)(?=\n\s*(?:जिला|तहसील|स्थित|नगर\s*निगम)|$)/i);
+  if(!match)return "";
+  return normalizeText(match[1]).replace(/\n/g," ").replace(/\s+/g," ").trim();
+}
+
+const VALID_PAN=/\b[A-Z]{5}[0-9]{4}[A-Z]\b/i;
+const MASKED_PAN=/\bX{5}[0-9]{4}X\b/i;
+
+function isValidPan(value){
+  const text=String(value||"");
+  return VALID_PAN.test(text)&&!MASKED_PAN.test(text);
+}
+
+function isWillRecord(record){
+  return /\bWILL\b/i.test(`${record.deedType||""} ${record.deedName||""}`);
+}
+
+function partyHeading(text){
+  const value=normalizeText(text);
+  if(/First\s+Party\s*\(|First\s+Party.*Details/i.test(value))return "first";
+  if(/Second\s+Party\s*\(|Second\s+Party.*Details/i.test(value))return "second";
+  if(/Witness\s+Details/i.test(value))return "witness";
+  return "";
+}
+
+function extractAllParties(pages){
+  const state={role:"",first:[],second:[]};
+  for(const page of pages){
+    const lines=clusterCoordinateLines(page.items);
+    const markers=lines.map(line=>({
+      y:line.y,
+      role:partyHeading(line.items.slice().sort((a,b)=>a.x-b.x).map(i=>i.text).join(" "))
+    })).filter(marker=>marker.role).sort((a,b)=>b.y-a.y);
+
+    let role=state.role;
+    let top=Math.max(850,...page.items.map(i=>i.y+30));
+    for(const marker of markers){
+      if(role==="first"||role==="second"){
+        state[role].push(...extractPartySegment(page.items,top,marker.y+2,page.width));
+      }
+      role=marker.role==="witness"?"":marker.role;
+      top=marker.y-2;
+    }
+    if(role==="first"||role==="second"){
+      state[role].push(...extractPartySegment(page.items,top,28,page.width));
+    }
+    const authorized=extractAuthorizedRepresentative(page.items,lines);
+    if(authorized&&state[authorized.role].length){
+      const party=state[authorized.role][state[authorized.role].length-1];
+      if(!/THROUGH AUTHORIZED REPRESENTATIVE/i.test(party.name)){
+        party.name=`${party.name} THROUGH AUTHORIZED REPRESENTATIVE ${authorized.name}`;
+      }
+    }
+    state.role=role;
+  }
+  return {first:dedupeParties(state.first).map(normalizeEntityParty),second:dedupeParties(state.second).map(normalizeEntityParty)};
+}
+
+function extractAuthorizedRepresentative(items,lines){
+  const heading=lines.find(line=>/Authorized\s+Person\s*\(For\s+(?:First|Second)\s+Party\)/i.test(
+    line.items.slice().sort((a,b)=>a.x-b.x).map(i=>i.text).join(" ")));
+  if(!heading)return null;
+  const headingText=heading.items.map(i=>i.text).join(" ");
+  const role=/First\s+Party/i.test(headingText)?"first":"second";
+  const witness=lines.find(line=>line.y<heading.y&&/Witness\s+Details/i.test(line.items.map(i=>i.text).join(" ")));
+  const bottom=witness?witness.y+2:28;
+  const relativeHeader=items.filter(i=>i.y<heading.y&&i.y>bottom&&/^Relative$/i.test(i.text)).map(i=>i.x);
+  const right=relativeHeader.length?Math.min(...relativeHeader):230;
+  const text=items.filter(i=>i.y<heading.y&&i.y>bottom&&i.x<right)
+    .sort((a,b)=>Math.abs(b.y-a.y)>2?b.y-a.y:a.x-b.x).map(i=>i.text).join(" ")
+    .replace(/\s+/g," ");
+  const match=text.match(/\(Authorized\s+To\)\s*([^()]+?)(?=\s*\(NA\)|$)/i);
+  return match?{role,name:match[1].trim()}:null;
+}
+
+function normalizeEntityParty(party){
+  if(/\b(?:LIMITED|LTD|PVT|LLP|COMPANY|CORPORATION|TRUST|SOCIETY|BANK|FIRM|AUTHORITY)\b/i.test(party.name)){
+    party.relation="NA";party.relative="NA";party.grandfather="NA";
+  }
+  return party;
+}
+
+function extractPartySegment(items,top,bottom,pageWidth){
+  const width=Number(pageWidth)||595;
+  const usable=items.filter(i=>i.y<top&&i.y>bottom&&i.x>=width*.08&&i.x<width*.78);
+  const headerX=(pattern,fallback)=>{
+    const found=usable.filter(i=>pattern.test(i.text)).map(i=>i.x);
+    return found.length?Math.min(...found):fallback;
+  };
+  const nameX=headerX(/^Name$/i,width*.115);
+  const relationX=headerX(/^Relation$/i,width*.268);
+  const relativeX=headerX(/^Relative$/i,width*.337);
+  const grandX=headerX(/^Grand$/i,width*.404);
+  const idX=headerX(/^ID$/i,width*.458);
+  const addressX=headerX(/^Address$/i,width*.567);
+  const afterAddress=usable.filter(i=>/^(?:Total|Transfer|Attendance)$/i.test(i.text)&&i.x>addressX).map(i=>i.x);
+  const addressEnd=afterAddress.length?Math.min(...afterAddress):width*.76;
+  const anchors=usable.filter(i=>VALID_PAN.test(i.text)||MASKED_PAN.test(i.text)).sort((a,b)=>b.y-a.y);
+  const parties=[];
+  for(let index=0;index<anchors.length;index++){
+    const current=anchors[index];
+    const upper=index===0?top:(anchors[index-1].y+current.y)/2;
+    const lower=index===anchors.length-1?bottom:(current.y+anchors[index+1].y)/2;
+    const band=usable.filter(i=>i.y<upper&&i.y>lower);
+    const panMatch=MASKED_PAN.test(current.text)?null:current.text.match(VALID_PAN);
+    const party={
+      name:cleanPartyName(readPartyRange(band,nameX,relationX)),
+      relation:cleanPartyValue(readPartyRange(band,relationX,relativeX)),
+      relative:cleanPartyValue(readPartyRange(band,relativeX,grandX)),
+      grandfather:cleanPartyValue(readPartyRange(band,grandX,idX)),
+      pan:panMatch?panMatch[0].toUpperCase():"NA",
+      address:cleanPartyValue(readPartyRange(band,addressX,addressEnd))
+    };
+    if(party.name!=="NA")parties.push(party);
+  }
+  return parties;
+}
+
+function readPartyColumn(items,width,start,end){
+  return items.filter(i=>i.x>=width*start&&i.x<width*end)
+    .sort((a,b)=>Math.abs(b.y-a.y)>2?b.y-a.y:a.x-b.x)
+    .map(i=>i.text).join(" ").replace(/\s+/g," ").trim();
+}
+
+function readPartyRange(items,start,end){
+  return items.filter(i=>i.x>=start-1&&i.x<end-1)
+    .sort((a,b)=>Math.abs(b.y-a.y)>2?b.y-a.y:a.x-b.x)
+    .map(i=>i.text).join(" ").replace(/\s+/g," ").trim();
+}
+
+function stripPartyHeaders(value){
+  return normalizeText(value)
+    .replace(/[\u0000-\u001f]/g," ")
+    .replace(/Name\s*(?:Relative\s*)?\(Gender\)\s*(?:Name\s*)?\/\s*(?:Name\s*)?Mobile/ig," ")
+    .replace(/^(?:(?:Name|Relative|Gender|Mobile)\s*|[\/()]\s*)+/i," ")
+    .replace(/(?:Relation|Relative\s*Name|Grand\s*father\s*name|ID\s*Proof\s*\/\s*PAN\s*Number|Address|Attendance\s*Status|Sign)/ig," ")
+    .replace(/^[\s()/]*(?:(?:Name|Relative|Relation|Gender|Mobile)[\s()/]*)+/i," ")
+    .replace(/\s+/g," ").trim();
+}
+
+function cleanPartyName(value){
+  const original=normalizeText(value).replace(/[\u0000-\u001f]/g," ").replace(/\s+/g," ").trim();
+  const authorizedAt=original.search(/(?:Authorized\s+)?Person\s*\(For\s+(?:First|Second)\s+Party\)|\bPerson\s+Name\s*\(Gender\)/i);
+  const representative=(original.match(/\(Authorized\s+To\)\s*([^()]+?)(?=\s*\(NA\)|$)/i)||[])[1];
+  const baseSource=authorizedAt>=0?original.slice(0,authorizedAt):original;
+  let cleaned=stripPartyHeaders(baseSource)
+    .replace(/^\s*(?:Male|Female)\s*\)\s*/i," ")
+    .replace(/\(\s*(?:Male|Female|Other)?\s*\)\s*\/?/ig," ")
+    .replace(/\(NA\)\s*\/?/ig," ")
+    .replace(/\/?\s*\*{2,}\d{2,}/g," ")
+    .replace(/\bTH\s+AUTH\b/ig,"THROUGH AUTHORIZED REPRESENTATIVE")
+    .replace(/\s+/g," ").trim();
+  if(cleaned&&representative){
+    cleaned=`${cleaned} THROUGH AUTHORIZED REPRESENTATIVE ${representative.trim()}`;
+  }
+  const isEntity=/\b(?:LIMITED|LTD|PVT|LLP|COMPANY|CORPORATION|TRUST|SOCIETY|BANK|FIRM|AUTHORITY)\b/i.test(cleaned);
+  if(!isEntity){
+    cleaned=cleaned.split(/\s+(?:Son|Daughter|Wife|Widow|Mother|Father|पुत्री?|पत्नी|विधवा|माता|पिता)(?=\s|$)/i)[0];
+  }
+  return cleaned.trim()||"NA";
+}
+
+function cleanPartyValue(value){
+  const cleaned=stripPartyHeaders(value)
+    .replace(/\([^)]*[\u0900-\u097F][^)]*\)/g," ")
+    .replace(/\s+/g," ").trim();
+  return cleaned||"NA";
+}
+
+function dedupeParties(parties){
+  const unique=new Map();
+  for(const party of parties){
+    const key=isValidPan(party.pan)?party.pan:`${party.name}|${party.relative}`.toLowerCase();
+    if(!unique.has(key)){unique.set(key,party);continue;}
+    const existing=unique.get(key);
+    for(const field of ["name","relation","relative","grandfather","address"]){
+      const oldValue=existing[field]||"";
+      const newValue=party[field]||"";
+      if(newValue!=="NA"&&newValue.length>oldValue.length)existing[field]=newValue;
+    }
+  }
+  return Array.from(unique.values());
+}
+
+function joinPartyField(parties,key){
+  return parties.map(party=>party[key]||"NA").join(" & ")||"NA";
+}
+
+function extractDeedType(rows){
+  for(const row of rows.slice(0,30)){
+    const line=normalizeText(row);
+    const match=line.match(/^(.{1,120}?)\s+DEED\s*$/i);
+    if(match)return match[1].replace(/\s+/g," ").trim().toUpperCase();
+  }
+  const text=normalizeText(rows.slice(0,30).join("\n"));
+  const match=text.match(/\b([A-Z][A-Z /&()'.,-]{1,120}?)\s+DEED\b/i);
+  return match?match[1].replace(/\s+/g," ").trim().toUpperCase():"";
+}
+
+function extractMoneyByCoordinates(page,labelPattern){
+  if(!page || !Array.isArray(page.items) || !page.items.length)return "0.00";
+
+  const lines=clusterCoordinateLines(page.items);
+
+  for(const line of lines){
+    const lineText=line.items
+      .slice()
+      .sort((a,b)=>a.x-b.x)
+      .map(item=>item.text)
+      .join(" ")
+      .replace(/\s+/g," ")
+      .trim();
+
+    const labelMatch=lineText.match(labelPattern);
+    if(!labelMatch)continue;
+
+    // Amount can be printed on the same visual line.
+    const after=lineText.slice((labelMatch.index||0)+labelMatch[0].length);
+    const same=firstValidMoney(after);
+    if(same!==null)return same;
+
+    const labelX=Math.min(...line.items.map(item=>item.x));
+    const labelRight=Math.max(...line.items.map(item=>item.x+item.width));
+    const labelY=line.y;
+
+    const candidates=[];
+
+    for(const item of page.items){
+      const value=firstValidMoney(item.text);
+      if(value===null)continue;
+
+      // In PDF coordinates, a value printed below the label normally has a
+      // slightly smaller Y. Allow same-line and up to 42 units below.
+      const down=labelY-item.y;
+      if(down < -5 || down > 42)continue;
+
+      // Stamp/fee values are in the same right-side column as their labels.
+      if(item.x < labelX-25)continue;
+
+      const horizontalGap=Math.abs(item.x-labelRight);
+      const score=(Math.abs(down)*4)+horizontalGap;
+
+      candidates.push({value,score,x:item.x,y:item.y});
+    }
+
+    candidates.sort((a,b)=>a.score-b.score);
+    if(candidates.length)return candidates[0].value;
+
+    return "0.00";
+  }
+
+  return "0.00";
+}
+
+function clusterCoordinateLines(items){
+  const sorted=items
+    .slice()
+    .sort((a,b)=>(b.y-a.y)||(a.x-b.x));
+
+  const lines=[];
+  const tolerance=4;
+
+  for(const item of sorted){
+    let line=lines.find(candidate=>Math.abs(candidate.y-item.y)<=tolerance);
+    if(!line){
+      line={y:item.y,items:[]};
+      lines.push(line);
+    }
+    line.items.push(item);
+  }
+
+  return lines.sort((a,b)=>b.y-a.y);
+}
+
+function extractMoneyFromEnglishRows(rows,labelPattern){
+  for(let i=0;i<rows.length;i++){
+    const row=normalizeText(rows[i]);
+    const match=row.match(labelPattern);
+    if(!match)continue;
+
+    const after=row.slice((match.index||0)+match[0].length);
+    const same=firstValidMoney(after);
+    if(same!==null)return same;
+
+    for(let j=i+1;j<=Math.min(i+2,rows.length-1);j++){
+      const next=normalizeText(rows[j]);
+      if(/^(GRN|Stamp\s*No|Registration\s*Fees?|SELLER|BUYER|EXECUTANT|CLAIMANT|AUTHOR|TRUSTEES|ATTORNEY)\b/i.test(next)){
+        break;
+      }
+      const value=firstValidMoney(next);
+      if(value!==null)return value;
+    }
+    return "0.00";
+  }
+  return "0.00";
+}
+
+function extractMoneyFromHindiRows(rows,field){
+  for(let i=0;i<rows.length;i++){
+    const canonical=canonicalHindi(rows[i]);
+    const anchor=findHindiAnchor(canonical,field);
+    if(!anchor)continue;
+
+    const segment=sliceHindiFieldSegment(canonical,anchor,field);
+    const same=firstValidMoney(segment);
+    if(same!==null)return same;
+
+    for(let j=i+1;j<=Math.min(i+2,rows.length-1);j++){
+      const nextCanonical=canonicalHindi(rows[j]);
+      if(hasAnyFinancialAnchor(nextCanonical))break;
+      const value=firstValidMoney(nextCanonical);
+      if(value!==null)return value;
+    }
+    return "0.00";
+  }
+  return "0.00";
+}
+
+function findHindiAnchor(canonical,field){
+  const patterns={
+    deal:/लनदन(?:रश)?/,
+    collector:/कलकटर(?:दर)?/,
+    stamp:/कलसटमप/,
+    regfee:/पजकरणफस/
+  };
+  const pattern=patterns[field];
+  if(!pattern)return null;
+  const match=canonical.match(pattern);
+  return match&&match.index!==undefined?{index:match.index,length:match[0].length}:null;
+}
+
+function sliceHindiFieldSegment(canonical,anchor,field){
+  const start=anchor.index+anchor.length;
+  let end=Math.min(canonical.length,start+80);
+
+  const stopPatterns={
+    deal:[/कलकटर/,/कलसटमप/,/पजकरणफस/],
+    collector:[/कलसटमप/,/पजकरणफस/,/लनदन/],
+    stamp:[/पजकरणफस/,/लनदन/,/कलकटर/,/कलकरत|कलदवदर|कलनयस|कलपरधकत/],
+    regfee:[/ईचलन/,/लनदन/,/कलकटर/,/कलसटमप/]
+  };
+
+  const tail=canonical.slice(start);
+  for(const pattern of (stopPatterns[field]||[])){
+    const match=tail.match(pattern);
+    if(match&&match.index!==undefined&&start+match.index<end)end=start+match.index;
+  }
+  return canonical.slice(start,end);
+}
+
+function hasAnyFinancialAnchor(canonical){
+  return /लनदन|कलकटर|कलसटमप|पजकरणफस|ईचलन/.test(canonical);
+}
+
+function firstValidMoney(text){
+  const matches=String(text||"").match(/\d[\d,]{0,14}\.\d{1,2}/g)||[];
+  for(const raw of matches){
+    const cleaned=raw.replace(/,/g,"");
+    if(!/^\d{1,15}\.\d{1,2}$/.test(cleaned))continue;
+    const integerPart=cleaned.split(".")[0];
+    if(integerPart.length>12)continue;
+    const number=Number(cleaned);
+    if(Number.isFinite(number))return number.toFixed(2);
+  }
+  return null;
+}
+
+function canonicalHindi(value){
+  return String(value||"")
+    .normalize("NFD")
+    .toLowerCase()
+    .replace(/[\u0900-\u0903]/g,"")
+    .replace(/[\u093a-\u094f\u0951-\u0957\u0962-\u0963]/g,"")
+    .replace(/[₹,:;|()[\]{}–—\-_/\\\s]/g,"")
+    .replace(/[^\u0904-\u0939a-z0-9.]/g,"");
+}
+
+function normalizeText(value){
+  return String(value||"")
+    .replace(/\u00a0/g," ")
+    .replace(/[\u200b\u200c\u200d\ufeff]/g,"")
+    .replace(/[–—]/g,"-")
+    .replace(/[ \t]+/g," ")
+    .replace(/\n{2,}/g,"\n")
+    .trim();
+}
+
+function compactText(value){
+  return normalizeText(value)
+    .toLowerCase()
+    .replace(/[₹:;|()[\]{}–—\-_,/.]/g,"")
+    .replace(/\s+/g,"");
+}
+
+function extractAfterCompact(compact,labels,kind){
+  for(const label of labels){
+    const index=compact.indexOf(label);
+    if(index<0)continue;
+    const after=compact.slice(index+label.length,index+label.length+80);
+
+    if(kind==="integer"){
+      const match=after.match(/(\d{1,10})/);
+      if(match)return match[1];
+    }
+
+    if(kind==="date"){
+      const match=after.match(/(\d{1,2})(\d{1,2})(\d{4})/);
+      if(match)return `${match[1]}/${match[2]}/${match[3]}`;
+    }
+  }
+  return "";
+}
+
+function firstMatch(text,patterns){
+  for(const pattern of patterns){
+    const match=String(text||"").match(pattern);
+    if(match&&match[1])return match[1].trim();
+  }
+  return "";
+}
+
+function normalizeDate(value){
+  if(!value)return "";
+  const normalized=String(value).replace(/-/g,"/");
+  const match=normalized.match(/(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+  return match?`${match[1].padStart(2,"0")}/${match[2].padStart(2,"0")}/${match[3]}`:normalized;
+}
+
+function emptyRecord(){
+  return {
+    fileName:"",
+    deedType:"",
+    deedName:"",
+    registryNumber:"",
+    registrationDate:"",
+    tokenNumber:"",
+    deedAmount:"0.00",
+    landValue:"0.00",
+    stampDuty:"0.00",
+    registrationFees:"0.00",
+    firstPartyName:"NA",
+    firstPartyRelation:"NA",
+    firstPartyRelative:"NA",
+    firstPartyGrandfather:"NA",
+    firstPartyPan:"NA",
+    firstPartyAddress:"NA",
+    secondPartyName:"NA",
+    secondPartyRelation:"NA",
+    secondPartyRelative:"NA",
+    secondPartyGrandfather:"NA",
+    secondPartyPan:"NA",
+    secondPartyAddress:"NA",
+    partyDataComplete:false,
+    status:""
+  };
+}
+
+function appendRow(record,serial){
+  const cls=record.status==="Completed"?"success":"warning";
+  resultBody.insertAdjacentHTML("beforeend",`<tr>
+    <td>${serial}</td>
+    <td>${escapeHtml(record.deedType||"Not Found")}</td>
+    <td>${escapeHtml(record.deedName||"Not Found")}</td>
+    <td>${escapeHtml(record.registryNumber||"Not Found")}</td>
+    <td>${escapeHtml(record.registrationDate||"Not Found")}</td>
+    <td>${escapeHtml(record.tokenNumber||"Not Found")}</td>
+    <td>${record.deedAmount}</td>
+    <td>${record.landValue}</td>
+    <td>${record.stampDuty}</td>
+    <td>${record.registrationFees}</td>
+    <td>${escapeHtml(record.firstPartyName)}</td>
+    <td>${escapeHtml(record.firstPartyRelation)}</td>
+    <td>${escapeHtml(record.firstPartyRelative)}</td>
+    <td>${escapeHtml(record.firstPartyGrandfather)}</td>
+    <td>${escapeHtml(record.firstPartyPan)}</td>
+    <td>${escapeHtml(record.firstPartyAddress)}</td>
+    <td>${escapeHtml(record.secondPartyName)}</td>
+    <td>${escapeHtml(record.secondPartyRelation)}</td>
+    <td>${escapeHtml(record.secondPartyRelative)}</td>
+    <td>${escapeHtml(record.secondPartyGrandfather)}</td>
+    <td>${escapeHtml(record.secondPartyPan)}</td>
+    <td>${escapeHtml(record.secondPartyAddress)}</td>
+    <td class="${cls}">${record.status}</td>
+  </tr>`);
+}
+
+function setProgress(done,total,message){
+  progressBar.style.width=(total?Math.round(done/total*100):0)+"%";
+  statusText.textContent=message;
+}
+
+csvButton.addEventListener("click",()=>{
+  const valid=results.filter(record=>record.status==="Completed");
+  if(!valid.length){alert("कोई Completed record नहीं है। Check records Excel में शामिल नहीं होंगे।");return;}
+  const rows=valid.map(record=>({
+    "Deed Type":record.deedType,"Deed Name":record.deedName,
+    "Deed Number":record.registryNumber,"Date":record.registrationDate,
+    "Token Number":record.tokenNumber,"Deed Amount":Number(record.deedAmount),
+    "Land Value":Number(record.landValue),"Stamp Duty":Number(record.stampDuty),
+    "Registration Fees":Number(record.registrationFees),
+    "First Party Name":record.firstPartyName,"First Party Relation":record.firstPartyRelation,
+    "First Party Father/Relative Name":record.firstPartyRelative,
+    "First Party Grandfather Name":record.firstPartyGrandfather,
+    "First Party PAN":record.firstPartyPan,"First Party Address":record.firstPartyAddress,
+    "Second Party Name":record.secondPartyName,"Second Party Relation":record.secondPartyRelation,
+    "Second Party Father/Relative Name":record.secondPartyRelative,
+    "Second Party Grandfather Name":record.secondPartyGrandfather,
+    "Second Party PAN":record.secondPartyPan,"Second Party Address":record.secondPartyAddress
+  }));
+  const sheet=XLSX.utils.json_to_sheet(rows);
+  sheet["!autofilter"]={ref:sheet["!ref"]};
+  sheet["!cols"]=Object.keys(rows[0]).map(key=>({wch:Math.min(55,Math.max(13,key.length+2))}));
+  const book=XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(book,sheet,"Income Tax Report");
+  XLSX.writeFile(book,"Income_Tax_Registry_Report.xlsx",{compression:true});
+});
+
+function csvCell(value){
+  return `"${String(value??"").replace(/"/g,'""')}"`;
+}
+
+function escapeHtml(value){
+  return String(value??"")
+    .replaceAll("&","&amp;")
+    .replaceAll("<","&lt;")
+    .replaceAll(">","&gt;")
+    .replaceAll('"',"&quot;")
+    .replaceAll("'","&#039;");
+}
+
+</script>
+</body>
+</html>
