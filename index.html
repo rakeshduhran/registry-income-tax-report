@@ -46,7 +46,7 @@ header{font-size:20px}
 </style>
 </head>
 <body>
-<header>PDF Reader <span class="version">v10.2 Optional PAN</span></header>
+<header>PDF Reader <span class="version">v10.4 Separate Excel</span></header>
 <main class="container">
 <section class="upload-card">
 <h1>Registry PDF Upload</h1>
@@ -56,7 +56,8 @@ header{font-size:20px}
 <input id="fileInput" type="file" accept="application/pdf,.pdf" multiple>
 </div>
 <button id="readButton" class="button primary" disabled>▶ Read Data</button>
-<button id="csvButton" class="button secondary" disabled>⬇ Download Excel</button>
+<button id="csvButton" class="button secondary" disabled>⬇ Income Tax Excel</button>
+<button id="checkButton" class="button secondary" disabled>⬇ Check Excel</button>
 <button id="clearButton" class="button danger" disabled>🗑 Clear</button>
 </div>
 </section>
@@ -77,9 +78,9 @@ header{font-size:20px}
 <th>Token No.</th><th>Deed Amount</th><th>Land Value</th><th>Stamp Duty</th>
 <th>Registration Fee</th>
 <th>First Party Name</th><th>First Party Relation</th><th>First Party Father/Relative</th><th>First Party Grandfather</th><th>First Party PAN</th><th>First Party Address</th>
-<th>Second Party Name</th><th>Second Party Relation</th><th>Second Party Father/Relative</th><th>Second Party Grandfather</th><th>Second Party PAN</th><th>Second Party Address</th><th>Status</th>
+<th>Second Party Name</th><th>Second Party Relation</th><th>Second Party Father/Relative</th><th>Second Party Grandfather</th><th>Second Party PAN</th><th>Second Party Address</th><th>Status</th><th>Check Reason</th>
 </tr></thead>
-<tbody id="resultBody"><tr><td colspan="23">पहले PDF चुनें</td></tr></tbody>
+<tbody id="resultBody"><tr><td colspan="24">पहले PDF चुनें</td></tr></tbody>
 </table>
 </section>
 </main>
@@ -95,7 +96,7 @@ pdfjsLib.GlobalWorkerOptions.workerSrc =
 
 const $ = id => document.getElementById(id);
 
-const fileInput=$("fileInput"), readButton=$("readButton"), csvButton=$("csvButton"),
+const fileInput=$("fileInput"), readButton=$("readButton"), csvButton=$("csvButton"), checkButton=$("checkButton"),
 clearButton=$("clearButton"), fileList=$("fileList"), progressArea=$("progressArea"),
 progressBar=$("progressBar"), statusText=$("statusText"), resultBody=$("resultBody"),
 selectedCount=$("selectedCount"), completedCount=$("completedCount"), checkCount=$("checkCount");
@@ -116,21 +117,22 @@ fileInput.addEventListener("change",()=>{
   checkCount.textContent="0";
   readButton.disabled=!selectedFiles.length;
   csvButton.disabled=true;
+  checkButton.disabled=true;
   clearButton.disabled=!selectedFiles.length;
   fileList.classList.toggle("hidden",!selectedFiles.length);
   fileList.innerHTML=selectedFiles.map((f,i)=>`<div class="file-item">${i+1}. ${escapeHtml(f.name)}</div>`).join("");
   resultBody.innerHTML=selectedFiles.length
-    ? `<tr><td colspan="23">${selectedFiles.length} PDF चुनी गई हैं। अब Read Data दबाएँ।</td></tr>`
-    : `<tr><td colspan="23">पहले PDF चुनें</td></tr>`;
+    ? `<tr><td colspan="24">${selectedFiles.length} PDF चुनी गई हैं। अब Read Data दबाएँ।</td></tr>`
+    : `<tr><td colspan="24">पहले PDF चुनें</td></tr>`;
 });
 
 clearButton.addEventListener("click",()=>{
   selectedFiles=[];results=[];fileInput.value="";
   selectedCount.textContent="0";completedCount.textContent="0";checkCount.textContent="0";
-  readButton.disabled=true;csvButton.disabled=true;clearButton.disabled=true;
+  readButton.disabled=true;csvButton.disabled=true;checkButton.disabled=true;clearButton.disabled=true;
   fileList.innerHTML="";fileList.classList.add("hidden");progressArea.classList.add("hidden");
   progressBar.style.width="0%";
-  resultBody.innerHTML='<tr><td colspan="23">पहले PDF चुनें</td></tr>';
+  resultBody.innerHTML='<tr><td colspan="24">पहले PDF चुनें</td></tr>';
 });
 
 readButton.addEventListener("click",async()=>{
@@ -140,6 +142,7 @@ readButton.addEventListener("click",async()=>{
   progressArea.classList.remove("hidden");
   readButton.disabled=true;
   csvButton.disabled=true;
+  checkButton.disabled=true;
 
   let completed=0, checks=0;
 
@@ -152,14 +155,8 @@ readButton.addEventListener("click",async()=>{
       const record=parseRegistryPages(pages);
       record.fileName=file.name;
 
-      record.status=(
-        record.deedType &&
-        record.deedName &&
-        record.registryNumber &&
-        record.registrationDate &&
-        record.tokenNumber &&
-        record.partyNamesComplete
-      ) ? "Completed" : "Check";
+      record.checkReason=getCheckReason(record);
+      record.status=record.checkReason ? "Check" : "Completed";
 
       if(record.status==="Completed"){
         completed++;
@@ -174,6 +171,7 @@ readButton.addEventListener("click",async()=>{
       const record=emptyRecord();
       record.fileName=file.name;
       record.status="Check";
+      record.checkReason=`PDF read error: ${err?.message||"Unknown error"}`;
       results.push(record);
       checks++;
       appendRow(record,i+1);
@@ -185,7 +183,8 @@ readButton.addEventListener("click",async()=>{
 
   setProgress(selectedFiles.length,selectedFiles.length,`Completed: ${completed} | Check: ${checks}`);
   readButton.disabled=false;
-  csvButton.disabled=!results.length;
+  csvButton.disabled=!results.some(record=>record.status==="Completed");
+  checkButton.disabled=!results.some(record=>record.status==="Check");
 });
 
 async function readFirstTwoPages(file){
@@ -297,6 +296,11 @@ function parseRegistryPages(pages){
   }
 
   const parties=extractAllParties(pages);
+  // Paperless deeds sometimes split NA/Aadhaar into separate PDF text items.
+  // In that case the coordinate parser cannot use the ID cell as a row anchor.
+  // The first-page e-stamp summary is an independent, reliable name/address fallback.
+  mergeSummaryParties(parties.first,extractSummaryParties(page1,"first"));
+  mergeSummaryParties(parties.second,extractSummaryParties(page1,"second"));
   record.firstParties=parties.first;
   record.secondParties=parties.second;
   record.firstPartyName=joinPartyField(parties.first,"name");
@@ -319,6 +323,38 @@ function parseRegistryPages(pages){
     (isWillRecord(record) || (parties.second.length>0 && parties.second.every(p=>p.name&&p.name!=="NA")));
 
   return record;
+}
+
+function getCheckReason(record){
+  const missing=[];
+  if(!record.deedType)missing.push("Deed Type");
+  if(!record.deedName)missing.push("Deed Name");
+  if(!record.registryNumber)missing.push("Deed Number");
+  if(!record.registrationDate)missing.push("Date");
+  if(!record.tokenNumber)missing.push("Token Number");
+  if(!record.firstParties?.length || record.firstParties.some(p=>!p.name||p.name==="NA"))missing.push("First Party Name");
+  if(!isWillRecord(record) && (!record.secondParties?.length || record.secondParties.some(p=>!p.name||p.name==="NA")))missing.push("Second Party Name");
+  return missing.length?`${missing.join(", ")} नहीं मिला`:"";
+}
+
+function extractSummaryParties(rows,role){
+  const text=rows.map(normalizeText).join("\n");
+  const label=role==="first"?"First\\s+Party":"Second\\s+Party";
+  const block=new RegExp(`${label}\\s+Detail(?:s)?[\\s\\S]{0,500}?Name\\s*:\\s*([^\\n]+?)(?=\\s*(?:/\\s*)?Stamp\\s+No\\s*:)[\\s\\S]{0,250}?Address\\s*:\\s*([^\\n]+)`,"i").exec(text);
+  if(!block)return [];
+  const address=cleanPartyValue(block[2].replace(/\s*(?:Mobile|Purpose)\s*:.*$/i,""));
+  return block[1].split(/\s+\/\s+/).map(name=>({
+    name:cleanPartyName(name),relation:"NA",relative:"NA",grandfather:"NA",pan:"NA",address,aadhaarKey:""
+  })).filter(p=>p.name&&p.name!=="NA");
+}
+
+function mergeSummaryParties(target,fallback){
+  // Never mix transliterated summary names with successfully decoded Hindi/table names.
+  // Fallback is only for a completely missed party section.
+  if(target.length)return;
+  for(const party of fallback){
+    target.push(party);
+  }
 }
 
 function extractDeedName(rows,text){
@@ -808,7 +844,8 @@ function emptyRecord(){
     secondPartyAddress:"NA",
     partyDataComplete:false,
     partyNamesComplete:false,
-    status:""
+    status:"",
+    checkReason:""
   };
 }
 
@@ -838,6 +875,7 @@ function appendRow(record,serial){
     <td>${escapeHtml(record.secondPartyPan)}</td>
     <td>${escapeHtml(record.secondPartyAddress)}</td>
     <td class="${cls}">${record.status}</td>
+    <td>${escapeHtml(record.checkReason||"")}</td>
   </tr>`);
 }
 
@@ -849,7 +887,17 @@ function setProgress(done,total,message){
 csvButton.addEventListener("click",()=>{
   const valid=results.filter(record=>record.status==="Completed");
   if(!valid.length){alert("कोई Completed record नहीं है। Check records Excel में शामिल नहीं होंगे।");return;}
-  const rows=valid.map(record=>({
+  downloadRecordsExcel(valid,"Income_Tax_Registry_Report.xlsx","Income Tax Report",false);
+});
+
+checkButton.addEventListener("click",()=>{
+  const checks=results.filter(record=>record.status==="Check");
+  if(!checks.length){alert("कोई Check record नहीं है।");return;}
+  downloadRecordsExcel(checks,"Registry_Check_Records.xlsx","Check Records",true);
+});
+
+function recordToExcelRow(record,includeCheckDetails){
+  const row={
     "Deed Type":record.deedType,"Deed Name":record.deedName,
     "Deed Number":record.registryNumber,"Date":record.registrationDate,
     "Token Number":record.tokenNumber,"Deed Amount":Number(record.deedAmount),
@@ -863,14 +911,24 @@ csvButton.addEventListener("click",()=>{
     "Second Party Father/Relative Name":record.secondPartyRelative,
     "Second Party Grandfather Name":record.secondPartyGrandfather,
     "Second Party PAN":record.secondPartyPan,"Second Party Address":record.secondPartyAddress
-  }));
+  };
+  if(includeCheckDetails){
+    row["PDF File Name"]=record.fileName;
+    row["Status"]=record.status;
+    row["Check Reason"]=record.checkReason||"Manual checking required";
+  }
+  return row;
+}
+
+function downloadRecordsExcel(records,fileName,sheetName,includeCheckDetails){
+  const rows=records.map(record=>recordToExcelRow(record,includeCheckDetails));
   const sheet=XLSX.utils.json_to_sheet(rows);
   sheet["!autofilter"]={ref:sheet["!ref"]};
   sheet["!cols"]=Object.keys(rows[0]).map(key=>({wch:Math.min(55,Math.max(13,key.length+2))}));
   const book=XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(book,sheet,"Income Tax Report");
-  XLSX.writeFile(book,"Income_Tax_Registry_Report.xlsx",{compression:true});
-});
+  XLSX.utils.book_append_sheet(book,sheet,sheetName);
+  XLSX.writeFile(book,fileName,{compression:true});
+}
 
 function csvCell(value){
   return `"${String(value??"").replace(/"/g,'""')}"`;
@@ -888,4 +946,3 @@ function escapeHtml(value){
 </script>
 </body>
 </html>
-
