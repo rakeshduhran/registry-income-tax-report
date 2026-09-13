@@ -46,7 +46,7 @@ header{font-size:20px}
 </style>
 </head>
 <body>
-<header>PDF Reader <span class="version">v10.7 Hindi Fix</span></header>
+<header>PDF Reader <span class="version">v10.9 Token Duplicate</span></header>
 <main class="container">
 <section class="upload-card">
 <h1>Registry PDF Upload</h1>
@@ -58,6 +58,7 @@ header{font-size:20px}
 <button id="readButton" class="button primary" disabled>▶ Read Data</button>
 <button id="csvButton" class="button secondary" disabled>⬇ Income Tax Excel</button>
 <button id="checkButton" class="button secondary" disabled>⬇ Check Excel</button>
+<button id="saveButton" class="button secondary" disabled>☁ Google Sheet में Save</button>
 <button id="clearButton" class="button danger" disabled>🗑 Clear</button>
 </div>
 </section>
@@ -97,11 +98,12 @@ pdfjsLib.GlobalWorkerOptions.workerSrc =
 const $ = id => document.getElementById(id);
 
 const fileInput=$("fileInput"), readButton=$("readButton"), csvButton=$("csvButton"), checkButton=$("checkButton"),
-clearButton=$("clearButton"), fileList=$("fileList"), progressArea=$("progressArea"),
+saveButton=$("saveButton"), clearButton=$("clearButton"), fileList=$("fileList"), progressArea=$("progressArea"),
 progressBar=$("progressBar"), statusText=$("statusText"), resultBody=$("resultBody"),
 selectedCount=$("selectedCount"), completedCount=$("completedCount"), checkCount=$("checkCount");
 
 let selectedFiles=[], results=[];
+const GOOGLE_SHEET_WEB_APP="https://script.google.com/macros/s/AKfycbwsexS0EZDX96negpoW02GuGh2oaC8aWUXvPJrdA_eT4jp-GBaKy6XV5mdZ7MKxfTzp/exec";
 
 fileInput.addEventListener("change",()=>{
   const chosen=Array.from(fileInput.files||[]);
@@ -119,6 +121,7 @@ fileInput.addEventListener("change",()=>{
   readButton.disabled=!selectedFiles.length;
   csvButton.disabled=true;
   checkButton.disabled=true;
+  saveButton.disabled=true;
   clearButton.disabled=!selectedFiles.length;
   fileList.classList.toggle("hidden",!selectedFiles.length);
   fileList.innerHTML=selectedFiles.map((f,i)=>`<div class="file-item">${i+1}. ${escapeHtml(f.name)}</div>`).join("");
@@ -130,7 +133,7 @@ fileInput.addEventListener("change",()=>{
 clearButton.addEventListener("click",()=>{
   selectedFiles=[];results=[];fileInput.value="";
   selectedCount.textContent="0";completedCount.textContent="0";checkCount.textContent="0";
-  readButton.disabled=true;csvButton.disabled=true;checkButton.disabled=true;clearButton.disabled=true;
+  readButton.disabled=true;csvButton.disabled=true;checkButton.disabled=true;saveButton.disabled=true;clearButton.disabled=true;
   fileList.innerHTML="";fileList.classList.add("hidden");progressArea.classList.add("hidden");
   progressBar.style.width="0%";
   resultBody.innerHTML='<tr><td colspan="22">पहले PDF चुनें</td></tr>';
@@ -144,6 +147,7 @@ readButton.addEventListener("click",async()=>{
   readButton.disabled=true;
   csvButton.disabled=true;
   checkButton.disabled=true;
+  saveButton.disabled=true;
 
   let completed=0, checks=0, duplicates=0;
   const seenRecords=new Set();
@@ -160,12 +164,12 @@ readButton.addEventListener("click",async()=>{
       record.checkReason=getCheckReason(record);
       record.status=record.checkReason ? "Check" : "Completed";
 
-      const recordKey=`${record.registryNumber||""}|${record.tokenNumber||""}`;
-      if(record.registryNumber && record.tokenNumber && seenRecords.has(recordKey)){
+      const recordKey=String(record.tokenNumber||"").trim().toUpperCase();
+      if(recordKey && seenRecords.has(recordKey)){
         duplicates++;
         continue;
       }
-      if(record.registryNumber && record.tokenNumber)seenRecords.add(recordKey);
+      if(recordKey)seenRecords.add(recordKey);
 
       if(record.status==="Completed"){
         completed++;
@@ -194,6 +198,7 @@ readButton.addEventListener("click",async()=>{
   readButton.disabled=false;
   csvButton.disabled=!results.some(record=>record.status==="Completed");
   checkButton.disabled=!results.some(record=>record.status==="Check");
+  saveButton.disabled=!results.some(record=>record.status==="Completed");
 });
 
 async function readFirstTwoPages(file){
@@ -982,6 +987,35 @@ checkButton.addEventListener("click",()=>{
   downloadRecordsExcel(checks,"Registry_Check_Records.xlsx","Check Records",true);
 });
 
+saveButton.addEventListener("click",async()=>{
+  const valid=results.filter(record=>record.status==="Completed");
+  if(!valid.length){alert("Google Sheet में save करने के लिए कोई Completed record नहीं है।");return;}
+  if(!confirm(`${valid.length} Completed record Google Sheet में save करें?`))return;
+
+  saveButton.disabled=true;
+  const oldLabel=saveButton.textContent;
+  saveButton.textContent="Saving...";
+  statusText.textContent=`Google Sheet में ${valid.length} record भेजे जा रहे हैं...`;
+
+  try{
+    await fetch(GOOGLE_SHEET_WEB_APP,{
+      method:"POST",
+      mode:"no-cors",
+      headers:{"Content-Type":"text/plain;charset=utf-8"},
+      body:JSON.stringify({records:valid})
+    });
+    statusText.textContent=`${valid.length} record Google Sheet को भेज दिए गए। Sheet खोलकर जाँचें।`;
+    alert("Data Google Sheet को भेज दिया गया है। Duplicate registry दोबारा save नहीं होगी।");
+  }catch(error){
+    console.error(error);
+    statusText.textContent="Google Sheet में data भेजने में error आया।";
+    alert("Data save नहीं हुआ। Internet connection और Apps Script deployment जाँचें।");
+  }finally{
+    saveButton.textContent=oldLabel;
+    saveButton.disabled=!results.some(record=>record.status==="Completed");
+  }
+});
+
 function excelDate(value){
   const match=String(value||"").match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
   return match?new Date(Date.UTC(Number(match[3]),Number(match[2])-1,Number(match[1]))):value;
@@ -1039,4 +1073,3 @@ function escapeHtml(value){
 </script>
 </body>
 </html>
-
