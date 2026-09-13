@@ -46,7 +46,7 @@ header{font-size:20px}
 </style>
 </head>
 <body>
-<header>PDF Reader <span class="version">v10.6 Verified 46</span></header>
+<header>PDF Reader <span class="version">v10.7 Hindi Fix</span></header>
 <main class="container">
 <section class="upload-card">
 <h1>Registry PDF Upload</h1>
@@ -620,7 +620,12 @@ function cleanPartyName(value){
   if(cleaned&&representative){
     cleaned=`${cleaned} THROUGH AUTHORIZED REPRESENTATIVE ${representative.trim()}`;
   }
-  cleaned=compactHindiSpacing(cleaned);
+  cleaned=compactHindiSpacing(cleaned)
+    .replace(/^ीमित\s*/,"श्रीमती ")
+    .replace(/ओमपित/g,"ओमपति")
+    .replace(/िवधवा/g,"विधवा")
+    .replace(/धम\s*बीर\s*िसह/g,"धर्मबीर सिंह")
+    .replace(/\s+/g," ").trim();
   const isEntity=/\b(?:LIMITED|LTD|PVT|LLP|COMPANY|CORPORATION|TRUST|SOCIETY|BANK|FIRM|AUTHORITY)\b/i.test(cleaned);
   if(!isEntity){
     cleaned=cleaned.split(/\s+(?:Son|Daughter|Wife|Widow|Mother|Father)(?=\s|$)|(?:पुत्री?|पत्नी|विधवा|माता|पिता)/i)[0];
@@ -644,9 +649,10 @@ function compactHindiSpacing(value){
 function dedupeParties(parties){
   const unique=new Map();
   for(const party of parties){
-    const key=isValidPan(party.pan)?party.pan:(party.aadhaarKey?`AAD:${party.aadhaarKey}`:`${party.name}|${party.relative}`.toLowerCase());
+    const key=party.aadhaarKey?`AAD:${party.aadhaarKey}`:(isValidPan(party.pan)?party.pan:`${party.name}|${party.relative}`.toLowerCase());
     if(!unique.has(key)){unique.set(key,party);continue;}
     const existing=unique.get(key);
+    if(!isValidPan(existing.pan)&&isValidPan(party.pan))existing.pan=party.pan;
     for(const field of ["name","relation","relative","grandfather","address"]){
       const oldValue=existing[field]||"";
       const newValue=party[field]||"";
@@ -978,7 +984,7 @@ checkButton.addEventListener("click",()=>{
 
 function excelDate(value){
   const match=String(value||"").match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
-  return match?new Date(Number(match[3]),Number(match[2])-1,Number(match[1])):value;
+  return match?new Date(Date.UTC(Number(match[3]),Number(match[2])-1,Number(match[1]))):value;
 }
 
 function recordToExcelRow(record,includeCheckDetails,serial){
