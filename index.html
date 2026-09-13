@@ -46,7 +46,7 @@ header{font-size:20px}
 </style>
 </head>
 <body>
-<header>PDF Reader <span class="version">v10.5 Clean Report</span></header>
+<header>PDF Reader <span class="version">v10.6 Verified 46</span></header>
 <main class="container">
 <section class="upload-card">
 <h1>Registry PDF Upload</h1>
@@ -318,6 +318,8 @@ function parseRegistryPages(pages){
   mergeSummaryParties(parties.second,secondSummary);
   preferReadableSummaryNames(parties.first,firstSummary);
   preferReadableSummaryNames(parties.second,secondSummary);
+  enrichAuthorizedEntity(parties.first,allRows);
+  enrichAuthorizedEntity(parties.second,allRows);
   record.firstParties=parties.first;
   record.secondParties=parties.second;
   record.firstPartyName=joinPartyField(parties.first,"name");
@@ -364,8 +366,16 @@ function extractSummaryParties(rows,role){
     name:cleanPartyName(name),relation:"NA",relative:"NA",grandfather:"NA",pan:"NA",address,aadhaarKey:""
   })).filter(p=>p.name&&p.name!=="NA");
   if(role==="first"&&parties.length===1&&/\b(?:LIMITED|LTD|PVT|LLP|COMPANY|TRUST|SOCIETY|BANK|FIRM|AUTHORITY)\b/i.test(parties[0].name)){
-    const propertyText=rows.join(" ").replace(/\s+/g," ");
-    const auth=(propertyText.match(/\bTH\s+AUTH\s+([A-Z][A-Z .'-]{2,60}?)(?=\s+(?:LC-|PAN-|SY|NA|First|Second|नगर|$))/i)||[])[1];
+    let auth="";
+    const authRow=rows.findIndex(row=>/\bTH(?:RU)?\s+AUTH\b/i.test(row));
+    if(authRow>=0){
+      const current=normalizeText(rows[authRow]);
+      auth=(current.match(/\bTH(?:RU)?\s+AUTH\s+([A-Z][A-Z .'-]{2,60})$/i)||[])[1]||"";
+      if(!auth){
+        const next=normalizeText(rows[authRow+1]||"");
+        if(/^[A-Z][A-Z .'-]{2,60}$/.test(next))auth=next;
+      }
+    }
     if(auth&&!/AUTHORIZED REPRESENTATIVE/i.test(parties[0].name))parties[0].name+=` THROUGH AUTHORIZED REPRESENTATIVE ${auth.trim()}`;
   }
   return parties;
@@ -387,6 +397,23 @@ function preferReadableSummaryNames(target,fallback){
     if(/[\u0900-\u097f]/.test(party.name))party.name=summary.name;
     if(/AUTHORIZED REPRESENTATIVE/i.test(summary.name)&&!/AUTHORIZED REPRESENTATIVE/i.test(party.name))party.name=summary.name;
   });
+}
+
+function enrichAuthorizedEntity(parties,rows){
+  if(parties.length!==1)return;
+  const party=parties[0];
+  const existingRepresentative=(party.name.match(/THROUGH\s+AUTHORIZED\s+REPRESENTATIVE\s+([A-Z][A-Z .'-]{2,80})$/i)||[])[1];
+  party.name=cleanPartyName(party.name);
+  if(!/\b(?:LIMITED|LTD|PVT|LLP|COMPANY|CORPORATION|TRUST|SOCIETY|BANK|FIRM|AUTHORITY)\b/i.test(party.name))return;
+  if(/AUTHORIZED REPRESENTATIVE/i.test(party.name))return;
+  if(existingRepresentative){
+    party.name+=` THROUGH AUTHORIZED REPRESENTATIVE ${existingRepresentative.trim()}`;
+    return;
+  }
+  const text=rows.map(normalizeText).join(" ").replace(/\s+/g," ");
+  const match=text.match(/\bTH(?:RU)?\s+AUTH\s+([A-Z][A-Z .'-]{2,60}?)(?=\s+(?:\(|[A-Z]{1,5}-\d|Name\s*\(|Address|PAN_|$))/i) ||
+    text.match(/\(Authorized\s+To\)\s*([A-Z][A-Z .'-]{2,60}?)(?=\s+(?:\(NA\)|\*{4}|Name\s*\(|Address|PANIPAT|$))/i);
+  if(match)party.name=`${party.name} THROUGH AUTHORIZED REPRESENTATIVE ${match[1].trim()}`;
 }
 
 function extractDeedName(rows,text){
@@ -490,11 +517,11 @@ function extractPartySegment(items,top,bottom,pageWidth){
     const found=usable.filter(i=>pattern.test(i.text)).map(i=>i.x);
     return found.length?Math.min(...found):fallback;
   };
-  const nameX=headerX(/^Name$/i,width*.115);
+  const nameX=headerX(/^Name(?:\s*\(Gender\))?$/i,width*.115);
   const relationX=headerX(/^Relation$/i,width*.268);
-  const relativeX=headerX(/^Relative$/i,width*.337);
-  const grandX=headerX(/^Grand$/i,width*.404);
-  const idX=headerX(/^ID$/i,width*.458);
+  const relativeX=headerX(/^Relative(?:\s*Name)?$/i,width*.337);
+  const grandX=headerX(/^Grand(?:\s*father)?$/i,width*.404);
+  const idX=headerX(/^ID(?:\s*Proof)?/i,width*.458);
   const addressX=headerX(/^Address$/i,width*.567);
   const afterAddress=usable.filter(i=>/^(?:Total|Transfer|Attendance)$/i.test(i.text)&&i.x>addressX).map(i=>i.x);
   const addressEnd=afterAddress.length?Math.min(...afterAddress):width*.76;
@@ -506,7 +533,7 @@ function extractPartySegment(items,top,bottom,pageWidth){
     anchors=usable.filter(i=>i.x>=idX-1&&i.x<addressX-1&&/^NA$/i.test(i.text));
   }
   if(!anchors.length){
-    anchors=items.filter(i=>i.y<top&&i.y>bottom&&i.x>=width*.68&&/^(?:Present|Absent)$/i.test(i.text));
+    anchors=items.filter(i=>i.y<top&&i.y>bottom&&i.x>=width*.60&&/^(?:Present|Absent)$/i.test(i.text));
   }
   anchors.sort((a,b)=>b.y-a.y);
   const parties=[];
@@ -540,9 +567,26 @@ function readPartyColumn(items,width,start,end){
 }
 
 function readPartyRange(items,start,end){
-  return items.filter(i=>i.x>=start-1&&i.x<end-1)
-    .sort((a,b)=>Math.abs(b.y-a.y)>2?b.y-a.y:a.x-b.x)
-    .map(i=>i.text).join(" ").replace(/\s+/g," ").trim();
+  const sorted=items.filter(i=>i.x>=start-1&&i.x<end-1)
+    .sort((a,b)=>Math.abs(b.y-a.y)>2?b.y-a.y:a.x-b.x);
+  let output="",previous=null,explicitSpace=false;
+  for(const item of sorted){
+    const text=String(item.text||"");
+    if(!text.trim()){
+      if(Number(item.width||0)>1)explicitSpace=true;
+      continue;
+    }
+    if(output){
+      const sameLine=previous&&Math.abs(previous.y-item.y)<=2;
+      const hindiPair=previous&&/[\u0900-\u097F]$/.test(previous.text)&&/^[\u0900-\u097F]/.test(text);
+      const combining=/^[\u093a-\u094f\u0951-\u0957]/.test(text);
+      if(!sameLine||!hindiPair||(explicitSpace&&!combining))output+=" ";
+    }
+    output+=text.trim();
+    previous={text:text.trim(),y:item.y};
+    explicitSpace=false;
+  }
+  return output.replace(/\s+/g," ").trim();
 }
 
 function stripPartyHeaders(value){
@@ -557,15 +601,21 @@ function stripPartyHeaders(value){
 
 function cleanPartyName(value){
   const original=normalizeText(value).replace(/[\u0000-\u001f]/g," ").replace(/\s+/g," ").trim();
-  const authorizedAt=original.search(/(?:Authorized\s+)?Person\s*\(For\s+(?:First|Second)\s+Party\)|\bPerson\s+Name\s*\(Gender\)/i);
-  const representative=(original.match(/\(Authorized\s+To\)\s*([^()]+?)(?=\s*\(NA\)|$)/i)||[])[1];
+  const representative=(original.match(/\(Authorized\s+To\)\s*([A-Z][A-Z .'-]{2,80}?)(?=\s*(?:THROUGH|Name\s*\(|Number\b|\(NA\)|$))/i)||[])[1];
+  let authorizedAt=original.search(/(?:Authorized\s+)?Person\s*\(For\s+(?:First|Second)\s+Party\)|\bPerson\s+Name\s*\(Gender\)/i);
+  const repeatedHeaderAt=original.search(/\bName\s*\(Gender\)/i);
+  if(repeatedHeaderAt>10&&(authorizedAt<0||repeatedHeaderAt<authorizedAt))authorizedAt=repeatedHeaderAt;
+  const repeatedNumberAt=representative?original.search(/\bNumber\s+(?=[A-Z])/i):-1;
+  if(repeatedNumberAt>10&&(authorizedAt<0||repeatedNumberAt<authorizedAt))authorizedAt=repeatedNumberAt;
+  const authorizedToAt=representative?original.search(/\(Authorized\s+To\)/i):-1;
+  if(authorizedToAt>10&&(authorizedAt<0||authorizedToAt<authorizedAt))authorizedAt=authorizedToAt;
   const baseSource=authorizedAt>=0?original.slice(0,authorizedAt):original;
   let cleaned=stripPartyHeaders(baseSource)
     .replace(/^\s*(?:Male|Female)\s*\)\s*/i," ")
     .replace(/\(\s*(?:Male|Female|Other)?\s*\)\s*\/?/ig," ")
     .replace(/\(NA\)\s*\/?/ig," ")
     .replace(/\/?\s*\*{2,}\d*/g," ")
-    .replace(/\bTH\s+AUTH\b/ig,"THROUGH AUTHORIZED REPRESENTATIVE")
+    .replace(/\bTH(?:RU)?\s+AUTH\b/ig,"THROUGH AUTHORIZED REPRESENTATIVE")
     .replace(/\s+/g," ").trim();
   if(cleaned&&representative){
     cleaned=`${cleaned} THROUGH AUTHORIZED REPRESENTATIVE ${representative.trim()}`;
@@ -581,6 +631,8 @@ function cleanPartyName(value){
 function cleanPartyValue(value){
   const cleaned=compactHindiSpacing(stripPartyHeaders(value)
     .replace(/\([^)]*[\u0900-\u097F][^)]*\)/g," ")
+    .replace(/\b(?:Total\s+Area|Owner\s+Share|Transfer\s+Hissa|Hissa\s+Transfer)(?:\s*\([^)]*\))?/ig," ")
+    .replace(/\b(?:SqYard|Marla)\b/ig," ")
     .replace(/\s+/g," ").trim());
   return cleaned||"NA";
 }
@@ -981,3 +1033,4 @@ function escapeHtml(value){
 </script>
 </body>
 </html>
+
