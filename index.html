@@ -46,7 +46,7 @@ header{font-size:20px}
 </style>
 </head>
 <body>
-<header>PDF Reader <span class="version">v10.1 Hindi Space Fix</span></header>
+<header>PDF Reader <span class="version">v10.2 Optional PAN</span></header>
 <main class="container">
 <section class="upload-card">
 <h1>Registry PDF Upload</h1>
@@ -158,7 +158,7 @@ readButton.addEventListener("click",async()=>{
         record.registryNumber &&
         record.registrationDate &&
         record.tokenNumber &&
-        record.partyDataComplete
+        record.partyNamesComplete
       ) ? "Completed" : "Check";
 
       if(record.status==="Completed"){
@@ -314,6 +314,9 @@ function parseRegistryPages(pages){
   record.partyDataComplete=parties.first.length>0 &&
     parties.first.every(p=>isValidPan(p.pan)) &&
     (isWillRecord(record) || (parties.second.length>0 && parties.second.every(p=>isValidPan(p.pan))));
+  record.partyNamesComplete=parties.first.length>0 &&
+    parties.first.every(p=>p.name&&p.name!=="NA") &&
+    (isWillRecord(record) || (parties.second.length>0 && parties.second.every(p=>p.name&&p.name!=="NA")));
 
   return record;
 }
@@ -427,7 +430,14 @@ function extractPartySegment(items,top,bottom,pageWidth){
   const addressX=headerX(/^Address$/i,width*.567);
   const afterAddress=usable.filter(i=>/^(?:Total|Transfer|Attendance)$/i.test(i.text)&&i.x>addressX).map(i=>i.x);
   const addressEnd=afterAddress.length?Math.min(...afterAddress):width*.76;
-  const anchors=usable.filter(i=>VALID_PAN.test(i.text)||MASKED_PAN.test(i.text)).sort((a,b)=>b.y-a.y);
+  let anchors=usable.filter(i=>VALID_PAN.test(i.text)||MASKED_PAN.test(i.text));
+  if(!anchors.length){
+    anchors=usable.filter(i=>i.x>=idX-1&&i.x<addressX-1&&/^\*{4}\d{4}$/.test(i.text));
+  }
+  if(!anchors.length){
+    anchors=usable.filter(i=>i.x>=idX-1&&i.x<addressX-1&&/^NA$/i.test(i.text));
+  }
+  anchors.sort((a,b)=>b.y-a.y);
   const parties=[];
   for(let index=0;index<anchors.length;index++){
     const current=anchors[index];
@@ -435,13 +445,16 @@ function extractPartySegment(items,top,bottom,pageWidth){
     const lower=index===anchors.length-1?bottom:(current.y+anchors[index+1].y)/2;
     const band=usable.filter(i=>i.y<upper&&i.y>lower);
     const panMatch=MASKED_PAN.test(current.text)?null:current.text.match(VALID_PAN);
+    const idText=readPartyRange(band,idX,addressX);
+    const aadhaarKey=(idText.match(/\*{4}\d{4}/)||[])[0]||"";
     const party={
       name:cleanPartyName(readPartyRange(band,nameX,relationX)),
       relation:cleanPartyValue(readPartyRange(band,relationX,relativeX)),
       relative:cleanPartyValue(readPartyRange(band,relativeX,grandX)),
       grandfather:cleanPartyValue(readPartyRange(band,grandX,idX)),
       pan:panMatch?panMatch[0].toUpperCase():"NA",
-      address:cleanPartyValue(readPartyRange(band,addressX,addressEnd))
+      address:cleanPartyValue(readPartyRange(band,addressX,addressEnd)),
+      aadhaarKey
     };
     if(party.name!=="NA")parties.push(party);
   }
@@ -479,7 +492,7 @@ function cleanPartyName(value){
     .replace(/^\s*(?:Male|Female)\s*\)\s*/i," ")
     .replace(/\(\s*(?:Male|Female|Other)?\s*\)\s*\/?/ig," ")
     .replace(/\(NA\)\s*\/?/ig," ")
-    .replace(/\/?\s*\*{2,}\d{2,}/g," ")
+    .replace(/\/?\s*\*{2,}\d*/g," ")
     .replace(/\bTH\s+AUTH\b/ig,"THROUGH AUTHORIZED REPRESENTATIVE")
     .replace(/\s+/g," ").trim();
   if(cleaned&&representative){
@@ -513,7 +526,7 @@ function compactHindiSpacing(value){
 function dedupeParties(parties){
   const unique=new Map();
   for(const party of parties){
-    const key=isValidPan(party.pan)?party.pan:`${party.name}|${party.relative}`.toLowerCase();
+    const key=isValidPan(party.pan)?party.pan:(party.aadhaarKey?`AAD:${party.aadhaarKey}`:`${party.name}|${party.relative}`.toLowerCase());
     if(!unique.has(key)){unique.set(key,party);continue;}
     const existing=unique.get(key);
     for(const field of ["name","relation","relative","grandfather","address"]){
@@ -794,6 +807,7 @@ function emptyRecord(){
     secondPartyPan:"NA",
     secondPartyAddress:"NA",
     partyDataComplete:false,
+    partyNamesComplete:false,
     status:""
   };
 }
