@@ -46,7 +46,7 @@ header{font-size:20px}
 </style>
 </head>
 <body>
-<header>PDF Reader <span class="version">v10.4 Separate Excel</span></header>
+<header>PDF Reader <span class="version">v10.5 Clean Report</span></header>
 <main class="container">
 <section class="upload-card">
 <h1>Registry PDF Upload</h1>
@@ -77,10 +77,10 @@ header{font-size:20px}
 <th>Sr.</th><th>Deed Type</th><th>Deed Name</th><th>Registry No.</th><th>Registration Date</th>
 <th>Token No.</th><th>Deed Amount</th><th>Land Value</th><th>Stamp Duty</th>
 <th>Registration Fee</th>
-<th>First Party Name</th><th>First Party Relation</th><th>First Party Father/Relative</th><th>First Party Grandfather</th><th>First Party PAN</th><th>First Party Address</th>
-<th>Second Party Name</th><th>Second Party Relation</th><th>Second Party Father/Relative</th><th>Second Party Grandfather</th><th>Second Party PAN</th><th>Second Party Address</th><th>Status</th><th>Check Reason</th>
+<th>First Party Name</th><th>First Party Relation</th><th>First Party Father/Relative</th><th>First Party PAN</th><th>First Party Address</th>
+<th>Second Party Name</th><th>Second Party Relation</th><th>Second Party Father/Relative</th><th>Second Party PAN</th><th>Second Party Address</th><th>Status</th><th>Check Reason</th>
 </tr></thead>
-<tbody id="resultBody"><tr><td colspan="24">पहले PDF चुनें</td></tr></tbody>
+<tbody id="resultBody"><tr><td colspan="22">पहले PDF चुनें</td></tr></tbody>
 </table>
 </section>
 </main>
@@ -110,7 +110,8 @@ fileInput.addEventListener("change",()=>{
     fileInput.value="";
     return;
   }
-  selectedFiles=chosen.filter(f=>f.type==="application/pdf"||f.name.toLowerCase().endsWith(".pdf"));
+  const pdfs=chosen.filter(f=>f.type==="application/pdf"||f.name.toLowerCase().endsWith(".pdf"));
+  selectedFiles=[...new Map(pdfs.map(f=>[`${f.name}|${f.size}|${f.lastModified}`,f])).values()];
   results=[];
   selectedCount.textContent=selectedFiles.length;
   completedCount.textContent="0";
@@ -122,8 +123,8 @@ fileInput.addEventListener("change",()=>{
   fileList.classList.toggle("hidden",!selectedFiles.length);
   fileList.innerHTML=selectedFiles.map((f,i)=>`<div class="file-item">${i+1}. ${escapeHtml(f.name)}</div>`).join("");
   resultBody.innerHTML=selectedFiles.length
-    ? `<tr><td colspan="24">${selectedFiles.length} PDF चुनी गई हैं। अब Read Data दबाएँ।</td></tr>`
-    : `<tr><td colspan="24">पहले PDF चुनें</td></tr>`;
+    ? `<tr><td colspan="22">${selectedFiles.length} PDF चुनी गई हैं। अब Read Data दबाएँ।</td></tr>`
+    : `<tr><td colspan="22">पहले PDF चुनें</td></tr>`;
 });
 
 clearButton.addEventListener("click",()=>{
@@ -132,7 +133,7 @@ clearButton.addEventListener("click",()=>{
   readButton.disabled=true;csvButton.disabled=true;checkButton.disabled=true;clearButton.disabled=true;
   fileList.innerHTML="";fileList.classList.add("hidden");progressArea.classList.add("hidden");
   progressBar.style.width="0%";
-  resultBody.innerHTML='<tr><td colspan="24">पहले PDF चुनें</td></tr>';
+  resultBody.innerHTML='<tr><td colspan="22">पहले PDF चुनें</td></tr>';
 });
 
 readButton.addEventListener("click",async()=>{
@@ -144,7 +145,8 @@ readButton.addEventListener("click",async()=>{
   csvButton.disabled=true;
   checkButton.disabled=true;
 
-  let completed=0, checks=0;
+  let completed=0, checks=0, duplicates=0;
+  const seenRecords=new Set();
 
   for(let i=0;i<selectedFiles.length;i++){
     const file=selectedFiles[i];
@@ -157,6 +159,13 @@ readButton.addEventListener("click",async()=>{
 
       record.checkReason=getCheckReason(record);
       record.status=record.checkReason ? "Check" : "Completed";
+
+      const recordKey=`${record.registryNumber||""}|${record.tokenNumber||""}`;
+      if(record.registryNumber && record.tokenNumber && seenRecords.has(recordKey)){
+        duplicates++;
+        continue;
+      }
+      if(record.registryNumber && record.tokenNumber)seenRecords.add(recordKey);
 
       if(record.status==="Completed"){
         completed++;
@@ -181,7 +190,7 @@ readButton.addEventListener("click",async()=>{
     checkCount.textContent=checks;
   }
 
-  setProgress(selectedFiles.length,selectedFiles.length,`Completed: ${completed} | Check: ${checks}`);
+  setProgress(selectedFiles.length,selectedFiles.length,`Completed: ${completed} | Check: ${checks} | Duplicate हटाए: ${duplicates}`);
   readButton.disabled=false;
   csvButton.disabled=!results.some(record=>record.status==="Completed");
   checkButton.disabled=!results.some(record=>record.status==="Check");
@@ -259,6 +268,7 @@ function parseRegistryPages(pages){
   const page2=pages[1]?.rows||[];
   const allRows=[...page1,...page2];
   const fullText=normalizeText(allRows.join("\n"));
+  const rawPageText=normalizeText(pages.flatMap(page=>page.items||[]).map(item=>item.text).join(" "));
   const compact=compactText(fullText);
   const record=emptyRecord();
 
@@ -279,6 +289,9 @@ function parseRegistryPages(pages){
       /\bDate\s*[:\-]?\s*(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{4})/i
     ])
   );
+  if(!record.registrationDate){
+    record.registrationDate=normalizeDate(firstMatch(rawPageText,[/\bDate\s*[:\-]?\s*(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{4})/i,/(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{4})/]));
+  }
 
   record.tokenNumber=firstMatch(fullText,[/\b(PAN_[A-Z0-9_]+)\b/i]);
 
@@ -296,11 +309,15 @@ function parseRegistryPages(pages){
   }
 
   const parties=extractAllParties(pages);
+  const firstSummary=extractSummaryParties(page1,"first");
+  const secondSummary=extractSummaryParties(page1,"second");
   // Paperless deeds sometimes split NA/Aadhaar into separate PDF text items.
   // In that case the coordinate parser cannot use the ID cell as a row anchor.
   // The first-page e-stamp summary is an independent, reliable name/address fallback.
-  mergeSummaryParties(parties.first,extractSummaryParties(page1,"first"));
-  mergeSummaryParties(parties.second,extractSummaryParties(page1,"second"));
+  mergeSummaryParties(parties.first,firstSummary);
+  mergeSummaryParties(parties.second,secondSummary);
+  preferReadableSummaryNames(parties.first,firstSummary);
+  preferReadableSummaryNames(parties.second,secondSummary);
   record.firstParties=parties.first;
   record.secondParties=parties.second;
   record.firstPartyName=joinPartyField(parties.first,"name");
@@ -343,9 +360,15 @@ function extractSummaryParties(rows,role){
   const block=new RegExp(`${label}\\s+Detail(?:s)?[\\s\\S]{0,500}?Name\\s*:\\s*([^\\n]+?)(?=\\s*(?:/\\s*)?Stamp\\s+No\\s*:)[\\s\\S]{0,250}?Address\\s*:\\s*([^\\n]+)`,"i").exec(text);
   if(!block)return [];
   const address=cleanPartyValue(block[2].replace(/\s*(?:Mobile|Purpose)\s*:.*$/i,""));
-  return block[1].split(/\s+\/\s+/).map(name=>({
+  const parties=block[1].split(/\s+\/\s+/).map(name=>({
     name:cleanPartyName(name),relation:"NA",relative:"NA",grandfather:"NA",pan:"NA",address,aadhaarKey:""
   })).filter(p=>p.name&&p.name!=="NA");
+  if(role==="first"&&parties.length===1&&/\b(?:LIMITED|LTD|PVT|LLP|COMPANY|TRUST|SOCIETY|BANK|FIRM|AUTHORITY)\b/i.test(parties[0].name)){
+    const propertyText=rows.join(" ").replace(/\s+/g," ");
+    const auth=(propertyText.match(/\bTH\s+AUTH\s+([A-Z][A-Z .'-]{2,60}?)(?=\s+(?:LC-|PAN-|SY|NA|First|Second|नगर|$))/i)||[])[1];
+    if(auth&&!/AUTHORIZED REPRESENTATIVE/i.test(parties[0].name))parties[0].name+=` THROUGH AUTHORIZED REPRESENTATIVE ${auth.trim()}`;
+  }
+  return parties;
 }
 
 function mergeSummaryParties(target,fallback){
@@ -355,6 +378,15 @@ function mergeSummaryParties(target,fallback){
   for(const party of fallback){
     target.push(party);
   }
+}
+
+function preferReadableSummaryNames(target,fallback){
+  if(!fallback.length||target.length!==fallback.length)return;
+  target.forEach((party,index)=>{
+    const summary=fallback[index];
+    if(/[\u0900-\u097f]/.test(party.name))party.name=summary.name;
+    if(/AUTHORIZED REPRESENTATIVE/i.test(summary.name)&&!/AUTHORIZED REPRESENTATIVE/i.test(party.name))party.name=summary.name;
+  });
 }
 
 function extractDeedName(rows,text){
@@ -473,6 +505,9 @@ function extractPartySegment(items,top,bottom,pageWidth){
   if(!anchors.length){
     anchors=usable.filter(i=>i.x>=idX-1&&i.x<addressX-1&&/^NA$/i.test(i.text));
   }
+  if(!anchors.length){
+    anchors=items.filter(i=>i.y<top&&i.y>bottom&&i.x>=width*.68&&/^(?:Present|Absent)$/i.test(i.text));
+  }
   anchors.sort((a,b)=>b.y-a.y);
   const parties=[];
   for(let index=0;index<anchors.length;index++){
@@ -480,7 +515,8 @@ function extractPartySegment(items,top,bottom,pageWidth){
     const upper=index===0?top:(anchors[index-1].y+current.y)/2;
     const lower=index===anchors.length-1?bottom:(current.y+anchors[index+1].y)/2;
     const band=usable.filter(i=>i.y<upper&&i.y>lower);
-    const panMatch=MASKED_PAN.test(current.text)?null:current.text.match(VALID_PAN);
+    const bandText=band.map(i=>i.text).join(" ");
+    const panMatch=MASKED_PAN.test(current.text)?null:(current.text.match(VALID_PAN)||bandText.match(VALID_PAN));
     const idText=readPartyRange(band,idX,addressX);
     const aadhaarKey=(idText.match(/\*{4}\d{4}/)||[])[0]||"";
     const party={
@@ -550,13 +586,7 @@ function cleanPartyValue(value){
 }
 
 function compactHindiSpacing(value){
-  let text=String(value||"").replace(/\s+/g," ").trim();
-  let previous;
-  do{
-    previous=text;
-    text=text.replace(/([\u0900-\u097F])\s+([\u0900-\u097F])/g,"$1$2");
-  }while(text!==previous);
-  return text;
+  return String(value||"").replace(/\s+/g," ").trim();
 }
 
 function dedupeParties(parties){
@@ -865,13 +895,11 @@ function appendRow(record,serial){
     <td>${escapeHtml(record.firstPartyName)}</td>
     <td>${escapeHtml(record.firstPartyRelation)}</td>
     <td>${escapeHtml(record.firstPartyRelative)}</td>
-    <td>${escapeHtml(record.firstPartyGrandfather)}</td>
     <td>${escapeHtml(record.firstPartyPan)}</td>
     <td>${escapeHtml(record.firstPartyAddress)}</td>
     <td>${escapeHtml(record.secondPartyName)}</td>
     <td>${escapeHtml(record.secondPartyRelation)}</td>
     <td>${escapeHtml(record.secondPartyRelative)}</td>
-    <td>${escapeHtml(record.secondPartyGrandfather)}</td>
     <td>${escapeHtml(record.secondPartyPan)}</td>
     <td>${escapeHtml(record.secondPartyAddress)}</td>
     <td class="${cls}">${record.status}</td>
@@ -896,24 +924,27 @@ checkButton.addEventListener("click",()=>{
   downloadRecordsExcel(checks,"Registry_Check_Records.xlsx","Check Records",true);
 });
 
-function recordToExcelRow(record,includeCheckDetails){
+function excelDate(value){
+  const match=String(value||"").match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+  return match?new Date(Number(match[3]),Number(match[2])-1,Number(match[1])):value;
+}
+
+function recordToExcelRow(record,includeCheckDetails,serial){
   const row={
+    "Sr. No.":serial,"PDF File Name":record.fileName,
     "Deed Type":record.deedType,"Deed Name":record.deedName,
-    "Deed Number":record.registryNumber,"Date":record.registrationDate,
+    "Deed Number":record.registryNumber,"Date":excelDate(record.registrationDate),
     "Token Number":record.tokenNumber,"Deed Amount":Number(record.deedAmount),
     "Land Value":Number(record.landValue),"Stamp Duty":Number(record.stampDuty),
     "Registration Fees":Number(record.registrationFees),
     "First Party Name":record.firstPartyName,"First Party Relation":record.firstPartyRelation,
     "First Party Father/Relative Name":record.firstPartyRelative,
-    "First Party Grandfather Name":record.firstPartyGrandfather,
     "First Party PAN":record.firstPartyPan,"First Party Address":record.firstPartyAddress,
     "Second Party Name":record.secondPartyName,"Second Party Relation":record.secondPartyRelation,
     "Second Party Father/Relative Name":record.secondPartyRelative,
-    "Second Party Grandfather Name":record.secondPartyGrandfather,
     "Second Party PAN":record.secondPartyPan,"Second Party Address":record.secondPartyAddress
   };
   if(includeCheckDetails){
-    row["PDF File Name"]=record.fileName;
     row["Status"]=record.status;
     row["Check Reason"]=record.checkReason||"Manual checking required";
   }
@@ -921,13 +952,17 @@ function recordToExcelRow(record,includeCheckDetails){
 }
 
 function downloadRecordsExcel(records,fileName,sheetName,includeCheckDetails){
-  const rows=records.map(record=>recordToExcelRow(record,includeCheckDetails));
+  const rows=records.map((record,index)=>recordToExcelRow(record,includeCheckDetails,index+1));
   const sheet=XLSX.utils.json_to_sheet(rows);
   sheet["!autofilter"]={ref:sheet["!ref"]};
   sheet["!cols"]=Object.keys(rows[0]).map(key=>({wch:Math.min(55,Math.max(13,key.length+2))}));
+  for(let row=2;row<=rows.length+1;row++){
+    if(sheet[`F${row}`])sheet[`F${row}`].z="dd/mm/yyyy";
+    for(const col of ["H","I","J","K"]){if(sheet[`${col}${row}`])sheet[`${col}${row}`].z="#,##0.00";}
+  }
   const book=XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(book,sheet,sheetName);
-  XLSX.writeFile(book,fileName,{compression:true});
+  XLSX.writeFile(book,fileName,{compression:true,cellDates:true});
 }
 
 function csvCell(value){
