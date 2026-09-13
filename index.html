@@ -46,7 +46,7 @@ header{font-size:20px}
 </style>
 </head>
 <body>
-<header>PDF Reader <span class="version">v10.0 Income Tax Report</span></header>
+<header>PDF Reader <span class="version">v10.1 Hindi Space Fix</span></header>
 <main class="container">
 <section class="upload-card">
 <h1>Registry PDF Upload</h1>
@@ -485,18 +485,29 @@ function cleanPartyName(value){
   if(cleaned&&representative){
     cleaned=`${cleaned} THROUGH AUTHORIZED REPRESENTATIVE ${representative.trim()}`;
   }
+  cleaned=compactHindiSpacing(cleaned);
   const isEntity=/\b(?:LIMITED|LTD|PVT|LLP|COMPANY|CORPORATION|TRUST|SOCIETY|BANK|FIRM|AUTHORITY)\b/i.test(cleaned);
   if(!isEntity){
-    cleaned=cleaned.split(/\s+(?:Son|Daughter|Wife|Widow|Mother|Father|पुत्री?|पत्नी|विधवा|माता|पिता)(?=\s|$)/i)[0];
+    cleaned=cleaned.split(/\s+(?:Son|Daughter|Wife|Widow|Mother|Father)(?=\s|$)|(?:पुत्री?|पत्नी|विधवा|माता|पिता)/i)[0];
   }
   return cleaned.trim()||"NA";
 }
 
 function cleanPartyValue(value){
-  const cleaned=stripPartyHeaders(value)
+  const cleaned=compactHindiSpacing(stripPartyHeaders(value)
     .replace(/\([^)]*[\u0900-\u097F][^)]*\)/g," ")
-    .replace(/\s+/g," ").trim();
+    .replace(/\s+/g," ").trim());
   return cleaned||"NA";
+}
+
+function compactHindiSpacing(value){
+  let text=String(value||"").replace(/\s+/g," ").trim();
+  let previous;
+  do{
+    previous=text;
+    text=text.replace(/([\u0900-\u097F])\s+([\u0900-\u097F])/g,"$1$2");
+  }while(text!==previous);
+  return text;
 }
 
 function dedupeParties(parties){
@@ -863,3 +874,4 @@ function escapeHtml(value){
 </script>
 </body>
 </html>
+
