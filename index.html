@@ -46,7 +46,7 @@ header{font-size:20px}
 </style>
 </head>
 <body>
-<header>PDF Reader <span class="version">v10.10 Reliable Party Rows</span></header>
+<header>PDF Reader <span class="version">v10.11 Page Continuation</span></header>
 <main class="container">
 <section class="upload-card">
 <h1>Registry PDF Upload</h1>
@@ -472,13 +472,17 @@ function extractAllParties(pages){
     let top=Math.max(850,...page.items.map(i=>i.y+30));
     for(const marker of markers){
       if(role==="first"||role==="second"){
-        state[role].push(...extractPartySegment(page.items,top,marker.y+2,page.width));
+        const segment=extractPartySegment(page.items,top,marker.y+2,page.width);
+        if(segment.length)state[role].push(...segment);
+        else mergePartyPageContinuation(state[role],page.items,top,marker.y+2,page.width);
       }
       role=(marker.role==="witness"||marker.role==="boundary")?"":marker.role;
       top=marker.y-2;
     }
     if(role==="first"||role==="second"){
-      state[role].push(...extractPartySegment(page.items,top,28,page.width));
+      const segment=extractPartySegment(page.items,top,28,page.width);
+      if(segment.length)state[role].push(...segment);
+      else mergePartyPageContinuation(state[role],page.items,top,28,page.width);
     }
     const authorized=extractAuthorizedRepresentative(page.items,lines);
     if(authorized&&state[authorized.role].length&&isEntityPartyName(state[authorized.role][state[authorized.role].length-1].name)){
@@ -490,6 +494,29 @@ function extractAllParties(pages){
     state.role=role;
   }
   return {first:dedupeParties(state.first).map(normalizeEntityParty),second:dedupeParties(state.second).map(normalizeEntityParty)};
+}
+
+function mergePartyPageContinuation(parties,items,top,bottom,pageWidth){
+  if(!parties.length)return;
+  const width=Number(pageWidth)||595;
+  const usable=items.filter(i=>i.y<top&&i.y>bottom&&i.x>=width*.08&&i.x<width*.82);
+  const addressHeaders=usable.filter(i=>/^Address$/i.test(i.text));
+  if(!addressHeaders.length)return;
+  const addressX=Math.min(...addressHeaders.map(i=>i.x));
+  const rightHeaders=usable.filter(i=>/^(?:Total|Transfer|Attendance)$/i.test(i.text)&&i.x>addressX).map(i=>i.x);
+  const addressEnd=rightHeaders.length?Math.min(...rightHeaders):width*.78;
+  const headerWords=/^(?:Name|Gender|Mobile|Relation|Relative|Grand|father|ID Proof \/|PAN|Number|Address|Transfer|Hissa.*|Attendance|Status|Sign)$/i;
+  const headerItems=usable.filter(i=>headerWords.test(normalizeText(i.text)));
+  const dataTop=headerItems.length?Math.min(...headerItems.map(i=>i.y))-2:top;
+  const continuation=cleanPartyValue(readPartyRange(
+    usable.filter(i=>i.y<dataTop&&!headerWords.test(normalizeText(i.text))),addressX,addressEnd
+  ));
+  if(continuation==="NA")return;
+  const party=parties[parties.length-1];
+  const current=party.address==="NA"?"":party.address;
+  if(!normalizeText(current).toLowerCase().endsWith(normalizeText(continuation).toLowerCase())){
+    party.address=normalizeText(`${current} ${continuation}`)||"NA";
+  }
 }
 
 function extractAuthorizedRepresentative(items,lines){
@@ -1044,7 +1071,9 @@ saveButton.addEventListener("click",async()=>{
 
 function excelDate(value){
   const match=String(value||"").match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
-  return match?new Date(Date.UTC(Number(match[3]),Number(match[2])-1,Number(match[1]))):value;
+  // Use an Excel day serial instead of a JavaScript Date. This avoids the
+  // hidden 05:30:10 time component caused by historical timezone conversion.
+  return match?Math.floor(Date.UTC(Number(match[3]),Number(match[2])-1,Number(match[1]))/86400000)+25569:value;
 }
 
 function recordToExcelRow(record,includeCheckDetails,serial){
@@ -1099,3 +1128,4 @@ function escapeHtml(value){
 </script>
 </body>
 </html>
+
